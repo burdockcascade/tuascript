@@ -1,0 +1,23 @@
+struct Token
+    type: TokenType,
+    value: string,
+    position: Position
+end
+
+struct Position
+    line: integer,
+    column: integer
+end
+
+enum TokenType
+    Identifier,
+    Keyword,
+    Operator,
+    Delimiter,
+    Literal
+end
+
+function tokenize() : Token[]
+    
+
+end
