@@ -1,6 +1,7 @@
-import { Token, Position, tokenize } from lexer;
-
-function main()
-
-
+function max(a: itneger, b: integer) : integer
+    if (a > b) then
+        return a
+    else 
+        return b
+    end
 end

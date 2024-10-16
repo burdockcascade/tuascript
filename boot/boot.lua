@@ -19,6 +19,11 @@ function print_table(t, indent)
     end
 end
 
+local keywords = {
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if",
+    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"
+}
+
 ------------------------------------------------------------------------------------------------------------------------
 --[[ MAKE TOKENS ]]-----------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------------
@@ -33,12 +38,9 @@ function tokenize(code)
     local OPERATORS = "[%!%+%-%*%/%%^#=]"
     local PUNCTUATION = "[%(%){%}%[%]%;%,%.%:]"
     local IDENTIFIERS = "[%w_]"
+    local INTEGER = "%d"
+    local BOOLEAN = "true|false"
     local STRINGS = "[\"']"
-
-    local keywords = {
-        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if",
-        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"
-    }
 
     local line = 1
     local column = 0
@@ -62,7 +64,31 @@ function tokenize(code)
             column = column + 1
         end
 
-        if char:match(IDENTIFIERS) then -- Identifiers and keywords
+        if char:match(INTEGER) then -- integer or float
+            tokenType = "INTEGER"
+            while i <= #code do
+                char = code:sub(i, i)
+                if char == "." then
+                    tokenType = "FLOAT"
+                elseif not char:match(INTEGER) then
+                    i = i - 1
+                    break
+                end
+                currentToken = currentToken .. char
+                i = i + 1
+            end
+        elseif char:match(BOOLEAN) then -- boolean
+            tokenType = "BOOLEAN"
+            while i <= #code do
+                char = code:sub(i, i)
+                if not char:match(BOOLEAN) then
+                    i = i - 1
+                    break
+                end
+                currentToken = currentToken .. char
+                i = i + 1
+            end
+        elseif char:match(IDENTIFIERS) then -- Identifiers and keywords
             while i <= #code do
                 char = code:sub(i, i)
                 if not char:match(IDENTIFIERS) then
@@ -127,6 +153,9 @@ function tokenize(code)
         table.insert(tokens, currentToken)
     end
 
+    -- insert EOF
+    table.insert(tokens, { type = "EOF" })
+
     return tokens
 end
 
@@ -138,24 +167,27 @@ function parse(tokens)
 
     local ast = { body = {} }
     local current_token = 1
+
+    -- header
+    local parse_expression
     
-    local function peek()
+    local peek = function()
         return tokens[current_token]
     end
 
-    local function consume()
+    local consume = function()
         current_token = current_token + 1
         return tokens[current_token - 1]
     end
 
-    local function expect(value)
+    local expect = function(value)
         local token = consume()
         if token.value ~= value then
-            error("Expected " .. value .. " but got " .. token.value)
+            error("Expected " .. value .. " but got " .. token.value .. " at line " .. token.line .. " column " .. token.column)
         end
     end
 
-    local function optional(value)
+    local optional = function(value)
         local token = peek()
         if token.value == value then
             consume()
@@ -164,7 +196,7 @@ function parse(tokens)
         return false
     end
 
-    local function parse_declaration()
+    local parse_declaration = function()
         local declaration = {}
 
         declaration.name = consume().value
@@ -177,10 +209,15 @@ function parse(tokens)
             declaration.type = "any"
         end
 
+        -- parse optional assignmen
+        if optional("=") then
+            declaration.value = parse_expression()
+        end
+
         return declaration
     end
 
-    local function parse_struct()
+    local parse_struct = function()
         
         -- consume "struct"
         expect("struct")
@@ -211,7 +248,222 @@ function parse(tokens)
         
     end
 
-    local function parse_function()
+    local parse_function_call = function()
+
+        -- consume function name
+        local name = consume().value
+
+        -- consume arguments
+        local arguments = {}
+        expect("(")
+        while peek().value ~= ")" do
+            table.insert(arguments, parse_expression())
+            
+            -- if next token is not close bracket, consume comma
+            if peek().value ~= ")" then
+                expect(",")
+            end
+
+        end
+        expect(")")
+
+        return {
+            type = "function_call",
+            name = name,
+            arguments = arguments
+        }
+
+    end 
+
+    local parse_primary_expression = function()
+        local token = peek()
+        if token.type == "IDENTIFIER" then
+
+            -- if next token is "(", parse function call
+            if tokens[current_token + 1].value == "(" then
+                return parse_function_call()
+            end
+
+            return { type = "identifier", value = consume().value }
+        elseif token.type == "STRING" then
+            return { type = "string", value = consume().value }
+        elseif token.type == "INTEGER" then
+            return { type = "integer", value = consume().value }
+        elseif token.type == "FLOAT" then
+            return { type = "float", value = consume().value }
+        elseif token.value == "true" or token.value == "false" then
+            return { type = "boolean", value = consume().value }
+        elseif token.value == "(" then
+            consume() -- consume "("
+            local expression = parse_expression()
+            expect(")")
+            return expression
+        elseif token.type == "EOF" or token.value == "end" then
+            return {}
+        else
+            error("Unexpected token " .. (token.type or "UNKNOWN") .. " " .. (token.value or "UNKNOWN"))
+        end
+    end
+
+    local parse_unary_expression = function()
+        local token = peek()
+        if token.value == "-" or token.value == "not" then
+            consume()
+            return { type = "unary", operator = token.value, expression = parse_unary_expression() }
+        else
+            return parse_primary_expression()
+        end
+    end
+
+    local parse_multiplicative_expression = function()
+        local expression = parse_unary_expression()
+        while peek().value == "*" or peek().value == "/" do
+            local token = consume()
+            expression = { type = "binary", operator = token.value, left = expression, right = parse_unary_expression() }
+        end
+        return expression
+    end
+
+    local parse_additive_expression = function()
+        local expression = parse_multiplicative_expression()
+        while peek().value == "+" or peek().value == "-" do
+            local token = consume()
+            expression = { type = "binary", operator = token.value, left = expression, right = parse_multiplicative_expression() }
+        end
+        return expression
+    end
+
+    local parse_relational_expression = function()
+        local expression = parse_additive_expression()
+        while peek().value == "==" or peek().value == "!=" or peek().value == "<" or peek().value == ">" or peek().value == "<=" or peek().value == ">=" do
+            local token = consume()
+            expression = { type = "binary", operator = token.value, left = expression, right = parse_additive_expression() }
+        end
+        return expression
+    end 
+
+    local parse_equality_expression = function()
+        local expression = parse_relational_expression()
+        while peek().value == "==" or peek().value == "!=" do
+            local token = consume()
+            expression = { type = "binary", operator = token.value, left = expression, right = parse_relational_expression() }
+        end
+        return expression
+    end 
+
+    local parse_logical_and_expression = function()
+        local expression = parse_equality_expression()
+        while peek().value == "and" do
+            local token = consume()
+            expression = { type = "binary", operator = token.value, left = expression, right = parse_equality_expression() }
+        end
+        return expression
+    end
+
+    local parse_logical_or_expression = function()
+        local expression = parse_logical_and_expression()
+        while peek().value == "or" do
+            local token = consume()
+            expression = { type = "binary", operator = token.value, left = expression, right = parse_logical_and_expression() }
+        end
+        return expression
+    end
+
+    local function precedence(operator)
+        if operator == "+" or operator == "-" then
+          return 1
+        elseif operator == "*" or operator == "/" then
+          return 2
+        elseif operator == "^" then
+          return 3
+        else
+          return 0  -- For parentheses and other tokens
+        end
+    end
+
+    
+
+    parse_expression = function()
+        return shunting_yard()
+    end
+
+    local parse_return_statement = function()
+        expect("return")
+        local expr = parse_expression()
+        return {
+            type = "return",
+            expression = expr
+        }
+    end
+
+    local parse_variable_declaration = function()
+        expect("let")
+        local declaration = parse_declaration()
+        return {
+            type = "variable_declaration",
+            declaration = declaration
+        }
+    end
+
+    local parse_function = function()
+    end
+
+    local parse_if_statement = function()
+
+        -- consume "if"
+        expect("if")
+
+        -- consume condition
+        local condition = parse_expression()
+
+        -- consume "then"
+        expect("then")
+
+        -- consume statements
+        local statements = {}
+        while peek().value ~= "end" do
+            table.insert(statements, parse_statement())
+        end
+
+        -- consume "end"
+        expect("end")
+
+        return {
+            type = "if",
+            condition = condition,
+            statements = statements
+        }
+    end
+
+    local parse_statement = function()
+        local token = peek()
+        if token.value == "struct" then
+            return parse_struct()
+        elseif token.value == "function" then
+            return parse_function()
+        elseif token.value == "return" then
+            return parse_return_statement()
+        elseif token.value == "var" or token.value == "local" or token.value == "const" then
+            return parse_variable_declaration()
+        elseif token.value == "if" then
+            return parse_if_statement()
+        elseif token.type == "IDENTIFIER" then
+            
+            -- if next token is "(", parse function call
+            if tokens[current_token + 1].value == "(" then
+                return parse_function_call()
+
+            -- if next token is "=", parse assignment
+            elseif tokens[current_token + 1].value == "=" then
+                return parse_assignment()
+            end
+
+        else 
+            error("Unexpected token " .. token.value .. " at line " .. token.line .. " column " .. token.column)
+        end
+    end 
+
+    parse_function = function()
         
         -- consume "function"
         expect("function")
@@ -242,77 +494,26 @@ function parse(tokens)
             return_type = "any"
         end
 
+        -- parse statements
+        local statements = {}
+        while peek().value ~= "end" do
+            table.insert(statements, parse_statement())
+        end
+
         expect("end")
 
         return {
             type = "function",
             name = name,
             parameters = parameters,
+            statements = statements,
             return_type = return_type
         }
         
     end
 
-    local function parse_factor()
-        if peek().type == "NUMBER" then
-          return consume("NUMBER")
-        elseif peek().type == "SYMBOL" and peek().value == "(" then
-          consume("SYMBOL", "(")
-          local expr = parse_expression()
-          consume("SYMBOL", ")")
-          return expr
-        else
-          error("Unexpected token in factor: " .. tostring(peek()))
-        end
-      end
-    
-      local function parse_term()
-        local left = parse_factor()
-        while peek() and peek().type == "OPERATOR" and (peek().value == "*" or peek().value == "/") do
-          local operator = consume("OPERATOR").value
-          local right = parse_factor()
-          left = { type = "BinaryExpression", operator = operator, left = left, right = right }
-        end
-        return left
-      end
-    
-      local function parse_expression()
-        local left = parse_term()
-        while peek() and peek().type == "OPERATOR" and (peek().value == "+" or peek().value == "-") do
-          local operator = consume("OPERATOR").value
-          local right = parse_term()
-          left = { type = "BinaryExpression", operator = operator, left = left, right = right }
-        end
-        return left
-      end
-
-    local function parse_return_statement()
-        local statement = { type = "return" }
-        consume() -- consume "return"
-        while peek().value ~= ";" do
-            table.insert(statement, parse_expression())
-            if peek().value ~= ";" then
-                consume() -- consume ","
-            end
-        end
-        consume() -- consume ";"
-        return statement
-    end
-
-    local function parse_statement()
-        local token = peek()
-        if token.value == "struct" then
-            return parse_struct()
-        elseif token.value == "function" then
-            return parse_function()
-        elseif token.value == "return" then
-            return parse_return_statement()
-        else 
-            error("Unexpected token " .. token.value)
-        end
-    end 
-
-    while current_token <= #tokens do
+    -- loop until EOF
+    while peek().type ~= "EOF" do
         table.insert(ast.body, parse_statement())
     end
 
@@ -327,6 +528,64 @@ end
 function compile(ast)
     local output = ""
 
+    -- unwrap expression from the ast into a lua expression
+    local unwrap_expression
+    unwrap_expression = function(expr)
+        if expr.type == "identifier" then
+            return expr.value
+        elseif expr.type == "function_call" then
+            local output = expr.name .. "("
+            for i, argument in ipairs(expr.arguments) do
+                output = output .. unwrap_expression(argument)
+                if i < #expr.arguments then
+                    output = output .. ", "
+                end
+            end
+            return output .. ")"
+        elseif expr.type == "string" then
+            return expr.value
+        elseif expr.type == "integer" then
+            return expr.value
+        elseif expr.type == "float" then
+            return expr.value
+        elseif expr.type == "boolean" then
+            return expr.value
+        elseif expr.type == "binary" then
+            return "(" .. unwrap_expression(expr.left) .. " " .. expr.operator .. " " .. unwrap_expression(expr.right) .. ")"
+        elseif expr.type == "unary" then
+            return expr.operator .. unwrap_expression(expr.expression)
+        end
+    end
+
+    local compile_statement
+    compile_statement = function(statement)
+        local output = ""
+
+        print("Statement: " .. statement.type)  
+
+        if statement.type == "return" then
+            output = output .. "return " .. unwrap_expression(statement.expression) .. "\n"
+        elseif statement.type == "variable_declaration" then
+            output = output .. "local " .. statement.declaration.name
+            if statement.declaration.value then
+                output = output .. " = " .. unwrap_expression(statement.declaration.value)
+            end
+            output = output .. "\n"
+        elseif statement.type == "function_call" then
+            output = output .. statement.name .. "("
+            for i, argument in ipairs(statement.arguments) do
+                output = output .. unwrap_expression(argument)
+                if i < #statement.arguments then
+                    output = output .. ", "
+                end
+            end
+            output = output .. ")\n"
+        end
+
+        return output
+    end
+
+    local indent = 0
     for _, statement in ipairs(ast.body) do
         if statement.type == "function" then
             output = output .. "function " .. statement.name .. "("
@@ -337,7 +596,18 @@ function compile(ast)
                 end
             end
             output = output .. ")\n"
+
+            print("Function: " .. statement.name .. " with " .. #statement.parameters .. " parameters" .. " and " .. #statement.statements .. " statements")
+
+            -- print statements
+            indent = indent + 1
+            for _, stmt in ipairs(statement.statements) do
+                output = output .. compile_statement(stmt)
+            end
+
             output = output .. "end\n\n"
+        else 
+            output = output .. compile_statement(statement)
         end
     end
 
@@ -358,13 +628,17 @@ file:close()
 
 -- tokenize file
 local tokens = tokenize(script)
+--print("Tokens:")
 --print_table(tokens)
 
 -- parse tokens
 local ast = parse(tokens)
+print("AST:")
 print_table(ast)
 
 -- write file
-local file = io.open("build/output.lua", "w")
---file:write(compile(ast))
-file:close()
+if ast then
+    local file = io.open("build/output.lua", "w")
+    file:write(compile(ast))
+    file:close()
+end

@@ -1,0 +1,34 @@
+class Vector2
+    x: integer
+    y: integer
+end
+
+class Vector3 extends Vector2
+    z: integer
+end
+
+class Person
+
+    name: string
+    age: integer
+
+    constructor(name: string, age : integer)
+        self.name = name
+        self.age = age
+    end
+
+    function Speak(msg: string)
+        console.out(msg)
+    end
+
+    static function create(name: string) : Person
+        return Person(name, 0)
+    end
+
+    function toString() : string
+        return "name: " + self.name  + " is " + self.age + " years old"
+    end
+
+end
+
+let p = Person()
