@@ -1,3 +1,0 @@
-function add(a: integer, b: integer): integer
-    return a * 7 + b / 3 + 3 - 2
-end

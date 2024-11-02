@@ -7,21 +7,55 @@ function table:find(value)
     return nil
 end
 
-function print_table(t, indent)
+function pretty_table(t, indent)
+    local output = ""
     indent = indent or ""
     for k, v in pairs(t) do
         if type(v) == "table" then
-            print(indent .. tostring(k) .. ":")
-            print_table(v, indent .. "  ")
+            output = output .. indent .. tostring(k) .. ":" .. "\n"
+            output = output .. pretty_table(v, indent .. "  ")
         else
-            print(indent .. tostring(k) .. ": " .. tostring(v))
+            output = output .. indent .. tostring(k) .. ": " .. tostring(v) .. "\n"
         end
     end
+    return output
+end
+
+function table_to_string(tbl, indent_level)
+    indent_level = indent_level or 0  -- Default indentation level is 0
+    local indent = string.rep("  ", indent_level) -- Create indent string using repetition
+    local result = "{\n"
+
+    for k, v in pairs(tbl) do
+      result = result .. indent .. "  "  -- Add two spaces for indentation
+
+      if type(k) == "number" then
+        result = result .. "[" .. k .. "] = "
+      elseif type(k) == "string" then
+        result = result .. '["' .. k .. '"] = '
+      end
+  
+      if type(v) == "number" then
+        result = result .. v .. ",\n"
+      elseif type(v) == "string" then
+        result = result .. '"' .. v .. '",\n'
+      elseif type(v) == "table" then
+        result = result .. table_to_string(v, indent_level + 1) .. ",\n"
+      else
+        result = result .. tostring(v) .. ",\n"
+      end
+    end
+    result = result .. indent .. "}"  -- Remove trailing comma and space, add closing brace and indent
+    return result
+  end
+
+function print_table(t)
+    print(pretty_table(t))
 end
 
 local keywords = {
     "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if",
-    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"
+    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
 }
 
 ------------------------------------------------------------------------------------------------------------------------
@@ -34,8 +68,10 @@ function tokenize(code)
         error("No code to tokenize")
     end
 
+    print("Tokenizing code")
+
     local WHITESPACE = "%s"
-    local OPERATORS = "[%!%+%-%*%/%%^#=]"
+    local OPERATORS = "[%!%+%-%*%/%>%<%%^#=]"
     local PUNCTUATION = "[%(%){%}%[%]%;%,%.%:]"
     local IDENTIFIERS = "[%w_]"
     local INTEGER = "%d"
@@ -165,7 +201,13 @@ end
 
 function parse(tokens)
 
-    local ast = { body = {} }
+    if not tokens then
+        error("No tokens to parse")
+    end
+
+    print("Parsing tokens")
+
+    local ast = { statements = {} }
     local current_token = 1
 
     -- header
@@ -309,7 +351,7 @@ function parse(tokens)
         local token = peek()
         if token.value == "-" or token.value == "not" then
             consume()
-            return { type = "unary", operator = token.value, expression = parse_unary_expression() }
+            return { type = "unary", operator = token.value, expression = parse_primary_expression() }
         else
             return parse_primary_expression()
         end
@@ -335,7 +377,7 @@ function parse(tokens)
 
     local parse_relational_expression = function()
         local expression = parse_additive_expression()
-        while peek().value == "==" or peek().value == "!=" or peek().value == "<" or peek().value == ">" or peek().value == "<=" or peek().value == ">=" do
+        while peek().value == "<" or peek().value == ">" or peek().value == "<=" or peek().value == ">=" do
             local token = consume()
             expression = { type = "binary", operator = token.value, left = expression, right = parse_additive_expression() }
         end
@@ -369,22 +411,46 @@ function parse(tokens)
         return expression
     end
 
-    local function precedence(operator)
-        if operator == "+" or operator == "-" then
-          return 1
-        elseif operator == "*" or operator == "/" then
-          return 2
-        elseif operator == "^" then
-          return 3
-        else
-          return 0  -- For parentheses and other tokens
-        end
-    end
-
-    
-
     parse_expression = function()
-        return shunting_yard()
+
+        -- if expression is an array with square brackets
+        if peek().value == "[" then
+            consume()
+            local array = {}
+
+            while peek().value ~= "]" do
+                table.insert(array, parse_expression())
+                if peek().value ~= "]" then
+                    expect(",")
+                end
+            end
+            expect("]")
+            return {
+                type = "array",
+                value = array
+            }
+        elseif peek().value == "{" then
+            consume()
+            local table = {}
+
+            while peek().value ~= "}" do
+                local key = parse_expression()
+                expect(":")
+                local value = parse_expression()
+                table[key] = value
+                if peek().value ~= "}" then
+                    expect(",")
+                end
+            end
+            expect("}")
+            return {
+                type = "table",
+                value = table
+            }
+        else 
+            return parse_logical_or_expression()
+        end
+
     end
 
     local parse_return_statement = function()
@@ -397,7 +463,7 @@ function parse(tokens)
     end
 
     local parse_variable_declaration = function()
-        expect("let")
+        expect("var")
         local declaration = parse_declaration()
         return {
             type = "variable_declaration",
@@ -408,68 +474,169 @@ function parse(tokens)
     local parse_function = function()
     end
 
-    local parse_if_statement = function()
+    local parse_statement
 
-        -- consume "if"
-        expect("if")
+    local parse_if_block = function()
 
-        -- consume condition
-        local condition = parse_expression()
+        local cases = {}
+        local elseblock = {}
 
-        -- consume "then"
-        expect("then")
+        -- consume "if" blocks
+        while peek().value == "if" do
+            consume()
+            local condition = parse_expression()
+            expect("then")
+            local statements = {}
+            while peek().value ~= "end" and peek().value ~= "else" do
+                table.insert(statements, parse_statement())
+            end
 
-        -- consume statements
-        local statements = {}
-        while peek().value ~= "end" do
-            table.insert(statements, parse_statement())
+            consume() 
+
+            table.insert(cases, { condition = condition, statements = statements })
         end
 
-        -- consume "end"
-        expect("end")
+        -- if last token is "else"
+        current_token = current_token - 1
+        if peek().value == "else" then
+            consume()
+            while peek().value ~= "end" do
+                table.insert(elseblock, parse_statement())
+            end
+            expect("end")
+        else
+            expect("end")
+        end
 
-        return {
+        local block = {
             type = "if",
-            condition = condition,
-            statements = statements
+            cases = cases,
+            elseblock = elseblock
+        }
+
+        return block
+        
+    end
+
+    local parse_assignment = function()
+        local name = consume().value
+        expect("=")
+        local expression = parse_expression()
+        return {
+            type = "assignment",
+            name = name,
+            expression = expression
         }
     end
 
-    local parse_statement = function()
+    local parse_enum = function()
+        expect("enum")
+        local name = consume().value
+        local items = {}
+        while peek().value ~= "end" do
+            table.insert(items, consume().value)
+            if peek().value ~= "end" then
+                expect(",")
+            end
+        end
+        expect("end")
+        return {
+            type = "enum",
+            name = name,
+            items = items
+        }
+    end
+
+    local parse_class = function()
+        expect("class")
+
+        local name = consume().value
+
+        print("Parsing class " .. name)
+    
+        -- consume functions
+        local functions = {}
+        local fields = {}
+        while peek().value ~= "end" do
+
+            if optional("var") then
+                local declaration = parse_declaration()
+                table.insert(fields, declaration)
+            end
+
+            -- consume function
+            if optional("function") then
+                table.insert(functions, parse_function(name))
+            end
+        end
+
+        expect("end")
+
+        return {
+            type = "class",
+            name = name,
+            fields = fields,
+            functions = functions
+        }
+
+    end
+
+    parse_identifier_chain = function()
+        local chain = {}
+
+        while peek().type == "IDENTIFIER" do
+            table.insert(chain, consume().value)
+            if peek().value == "." then
+                consume()
+            else
+                break
+            end
+        end
+
+        return chain
+        
+    end
+
+    parse_statement = function()
         local token = peek()
         if token.value == "struct" then
             return parse_struct()
+        elseif token.value == "class" then
+            return parse_class()
+        elseif token.value == "enum" then
+            return parse_enum()
         elseif token.value == "function" then
             return parse_function()
         elseif token.value == "return" then
             return parse_return_statement()
-        elseif token.value == "var" or token.value == "local" or token.value == "const" then
+        elseif token.value == "var" then
             return parse_variable_declaration()
         elseif token.value == "if" then
-            return parse_if_statement()
+            return parse_if_block()
         elseif token.type == "IDENTIFIER" then
             
-            -- if next token is "(", parse function call
-            if tokens[current_token + 1].value == "(" then
-                return parse_function_call()
+            local chain = parse_identifier_chain()
 
-            -- if next token is "=", parse assignment
-            elseif tokens[current_token + 1].value == "=" then
-                return parse_assignment()
-            end
+            --if tokens[current_token + 1].value == "=" then
+                --return parse_assignment()
+            --end
 
-        else 
-            error("Unexpected token " .. token.value .. " at line " .. token.line .. " column " .. token.column)
+            return {
+                type = "identifier_chain",
+                chain = chain
+            }
         end
     end 
 
-    parse_function = function()
+    parse_function = function(class)
         
         -- consume "function"
-        expect("function")
+        optional("function")
 
         -- consume function name
         local name = consume().value
+
+        print("Parsing function " .. name)
 
         -- consume parameters
         local parameters = {}
@@ -487,8 +654,7 @@ function parse(tokens)
 
         -- consume return type
         local return_type
-        if peek().value == ":" then
-            consume()
+        if optional(":") then
             return_type = consume().value
         else
             return_type = "any"
@@ -497,13 +663,17 @@ function parse(tokens)
         -- parse statements
         local statements = {}
         while peek().value ~= "end" do
-            table.insert(statements, parse_statement())
+            local statement = parse_statement()
+            if statement then
+                table.insert(statements, statement)
+            end
         end
 
         expect("end")
 
         return {
             type = "function",
+            class = class or nil,
             name = name,
             parameters = parameters,
             statements = statements,
@@ -514,7 +684,10 @@ function parse(tokens)
 
     -- loop until EOF
     while peek().type ~= "EOF" do
-        table.insert(ast.body, parse_statement())
+        local s =  parse_statement(ast)
+        if s then
+            table.insert(ast.statements, s)
+        end
     end
 
     return ast
@@ -526,6 +699,13 @@ end
 ------------------------------------------------------------------------------------------------------------------------
 
 function compile(ast)
+
+    if not ast then
+        error("No ast to compile")
+    end
+
+    print("Compiling to lua")
+
     local output = ""
 
     -- unwrap expression from the ast into a lua expression
@@ -553,15 +733,30 @@ function compile(ast)
         elseif expr.type == "binary" then
             return "(" .. unwrap_expression(expr.left) .. " " .. expr.operator .. " " .. unwrap_expression(expr.right) .. ")"
         elseif expr.type == "unary" then
-            return expr.operator .. unwrap_expression(expr.expression)
+            return expr.operator .. " " .. unwrap_expression(expr.expression)
+        elseif expr.type == "array" then
+            local output = "{"
+            for i, value in ipairs(expr.value) do
+                output = output .. unwrap_expression(value)
+                if i < #expr.value then
+                    output = output .. ", "
+                end
+            end
+            return output .. "}"
+        elseif expr.type == "table" then
+            local output = "{"
+            for key, value in pairs(expr.value) do
+                output = output .. "[" .. unwrap_expression(key) .. "] = " .. unwrap_expression(value)
+            end
+            return output .. "}"
+        else
+            return "nil"
         end
     end
 
     local compile_statement
     compile_statement = function(statement)
         local output = ""
-
-        print("Statement: " .. statement.type)  
 
         if statement.type == "return" then
             output = output .. "return " .. unwrap_expression(statement.expression) .. "\n"
@@ -571,6 +766,8 @@ function compile(ast)
                 output = output .. " = " .. unwrap_expression(statement.declaration.value)
             end
             output = output .. "\n"
+        elseif statement.type == "assignment" then
+            output = output .. statement.name .. " = " .. unwrap_expression(statement.expression) .. "\n"
         elseif statement.type == "function_call" then
             output = output .. statement.name .. "("
             for i, argument in ipairs(statement.arguments) do
@@ -580,32 +777,105 @@ function compile(ast)
                 end
             end
             output = output .. ")\n"
+        elseif statement.type == "if" then
+            for i, case in ipairs(statement.cases) do
+                if i == 1 then
+                    output = output .. "if " .. unwrap_expression(case.condition) .. " then\n"
+                else
+                    output = output .. "elseif " .. unwrap_expression(case.condition) .. " then\n"
+                end
+                for _, stmt in ipairs(case.statements) do
+                    output = output .. compile_statement(stmt)
+                end
+            end
+            if #statement.elseblock > 0 then
+                output = output .. "else\n"
+                for _, stmt in ipairs(statement.elseblock) do
+                    output = output .. compile_statement(stmt)
+                end
+            end
+            output = output .. "end\n\n"
+        end
+
+        return output .. "\n"
+    end
+
+    local print_function = function(statement)
+        local output
+
+        local is_class = statement.class and true or false
+        local is_constructor = is_class and statement.name == "constructor"
+
+        if is_class then
+            if is_constructor then
+                output = "function " .. statement.class .. ":new("
+            else
+                output = "function " .. statement.class .. ":" .. statement.name .. "("
+            end
+        else
+            output = "function " .. statement.name .. "("
+        end
+
+        for i, parameter in ipairs(statement.parameters) do
+            output = output .. parameter.name
+            if i < #statement.parameters then
+                output = output .. ", "
+            end
+        end
+        output = output .. ")\n"
+
+        -- set self
+        if is_constructor then
+            output = output .. "local self = {}\n"
+            output = output .. "setmetatable(self, { __index = " .. statement.class .. " })\n"
+        end
+
+        -- print statements
+        for _, stmt in ipairs(statement.statements) do
+            output = output .. compile_statement(stmt)
+        end
+
+        if is_constructor then
+            output = output .. "return self\n"
+        end
+
+        output = output .. "end\n\n"
+
+        return output
+    end
+
+    local print_class = function(statement)
+        local output
+        output = "local " .. statement.name .. " = {}\n"
+        for _, field in ipairs(statement.fields or {}) do
+            local value = field.value or "nil"
+            output = output .. statement.name .. "." .. field.name .. " = " .. unwrap_expression(value) .. "\n"
+        end
+        output = output .. "\n"
+
+        for _, func in ipairs(statement.functions or {}) do
+            output = output .. print_function(func)
         end
 
         return output
     end
 
     local indent = 0
-    for _, statement in ipairs(ast.body) do
+    for _, statement in ipairs(ast.statements) do
+
         if statement.type == "function" then
-            output = output .. "function " .. statement.name .. "("
-            for i, parameter in ipairs(statement.parameters) do
-                output = output .. parameter.name
-                if i < #statement.parameters then
-                    output = output .. ", "
+            output = output .. print_function(statement)
+        elseif statement.type == "class" then
+            output = output .. print_class(statement)
+        elseif statement.type == "enum" then
+            output = output .. "local " .. statement.name .. " = {\n"
+            for i, item in ipairs(statement.items) do
+                output = output .. "    " .. item .. " = " .. i
+                if i < #statement.items then
+                    output = output .. ",\n"
                 end
             end
-            output = output .. ")\n"
-
-            print("Function: " .. statement.name .. " with " .. #statement.parameters .. " parameters" .. " and " .. #statement.statements .. " statements")
-
-            -- print statements
-            indent = indent + 1
-            for _, stmt in ipairs(statement.statements) do
-                output = output .. compile_statement(stmt)
-            end
-
-            output = output .. "end\n\n"
+            output = output .. "\n}\n\n"
         else 
             output = output .. compile_statement(statement)
         end
@@ -628,13 +898,22 @@ file:close()
 
 -- tokenize file
 local tokens = tokenize(script)
---print("Tokens:")
---print_table(tokens)
+
+if tokens then
+    local file = io.open("build/tokens.lua", "w")
+    file:write(table_to_string(tokens))
+    file:close()
+end
 
 -- parse tokens
 local ast = parse(tokens)
-print("AST:")
-print_table(ast)
+--print_table(ast)
+
+if ast then
+    local file = io.open("build/ast.lua", "w")
+    file:write(table_to_string(ast))
+    file:close()
+end
 
 -- write file
 if ast then

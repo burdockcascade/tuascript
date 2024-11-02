@@ -1,7 +1,97 @@
-function max(a: itneger, b: integer) : integer
-    if (a > b) then
-        return a
-    else 
-        return b
-    end
+class Token
+    var type: TokenType
+    var value: any
 end
+
+enum TokenType
+    Identifier,
+    Keyword,
+    Operator,
+    Delimiter,
+    Literal,
+    Unknown
+end
+
+class Tokenizer
+
+    var keywords = [
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if",
+        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until",
+        "while", "loop"
+    ]
+
+    var WHITESPACE = "%s"
+    var OPERATORS = "[%!%+%-%*%/%>%<%%^#=]"
+    var PUNCTUATION = "[%(%){%}%[%]%;%,%.%:]"
+    var IDENTIFIERS = "[%w_]"
+    var INTEGER = "%d"
+    var BOOLEAN = "true|false"
+
+    var line: integer
+    var column: integer
+
+    function constructor()
+    end
+
+    function tokenize(code: string): bool
+
+        if not code then
+            return false
+        end
+
+    end
+
+end
+
+class Parser
+
+    var tokens
+    var ast = {}
+
+    function constructor(tokens)
+    end
+
+    function parse()
+    end
+
+    function peek()
+    end
+
+    function parse_statement()
+  
+    end
+
+    function parse_function()
+      
+    end
+    
+    function parse_class()
+ 
+    end
+
+    function parse_variable_declaration()
+    end
+
+    function parse_assignment()
+    end
+
+end
+
+class Compiler
+
+    var ast
+
+    function constructor(ast)
+    end
+
+    function write_class()
+    end
+
+    function write_function()
+    end
+
+    function write_enum()
+    end
+    
+end
+
