@@ -899,6 +899,9 @@ file:close()
 -- tokenize file
 local tokens = tokenize(script)
 
+-- makdir
+os.execute("mkdir build")
+
 if tokens then
     local file = io.open("build/tokens.lua", "w")
     file:write(table_to_string(tokens))
